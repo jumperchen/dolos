@@ -1,7 +1,14 @@
 <template>
-  <div class="selected-info">
+  <div class="selected-info">  
     <transition name="scroll-y-transition" mode="out-in">
       <div v-if="selectedNode" key="">
+        <div class="editor popup">
+          <div>
+              <span ref="leftFileName" class="diff-file" style="background-color: #FFCCCE;"></span>
+              <span class="diff-file" style="float: right; background-color: #EBFEDC;">{{ selectedNode.extra.fullName || selectedNode.shortPath || "unknown" }}</span>
+          </div>
+          <div ref="editorElem" class="editor-element"></div>
+        </div>
         <v-card>
           <v-card-title> Selected node </v-card-title>
 
@@ -102,12 +109,15 @@
 </template>
 
 <script lang="ts" setup>
-import { computed, toRef } from "vue";
+import { ref, shallowRef, computed, toRef, onMounted, onUnmounted, watch } from "vue";
 import { useCluster } from "@/composables";
 import { File, Legend } from "@/api/models";
 import { Cluster, Clustering } from "@/util/clustering-algorithms/ClusterTypes";
 import { getClusterElements } from "@/util/clustering-algorithms/ClusterFunctions";
 import { formatLongDateTime } from "@/util/TimeFormatter";
+import { useMonacoEditorWorkers } from "@/composables/useMonacoEditorWorkers";
+import * as monaco from "monaco-editor";
+import { useMetadataStore } from "@/api/stores";
 
 interface Props {
   currentClustering: Clustering;
@@ -151,8 +161,84 @@ const selectedClusterPair = computed(() => {
   if (props.selectedCluster.size !== 1) return null;
 
   const [pair] = props.selectedCluster;
+
   return pair;
 });
+
+const leftFileName = shallowRef();
+// Editor template ref
+const editorElem = shallowRef();
+// Monaco editor
+const editor = shallowRef();
+useMonacoEditorWorkers();
+
+const metadataStore = useMetadataStore();
+
+// Initialize the editor.
+const initialize = (): void => {
+  if (!leftFileName.value) {
+    // do it later
+    setTimeout(() => {
+      initialize(); 
+    });
+    return;
+  }
+  const curretFile = selectedCurrentFile();
+  leftFileName.value.innerHTML = curretFile.leftFile.shortPath;
+  // Monaco file models.
+  const leftFileModel = monaco.editor.createModel(curretFile.leftFile.content, metadataStore.metadata.language);
+  const rightFileModel = monaco.editor.createModel(curretFile.rightFile.content, metadataStore.metadata.language);
+
+  // Monaco diff editor
+  editor.value = monaco.editor.createDiffEditor(editorElem.value, {
+    enableSplitViewResizing: false, // Do not allow resizing of the diff view.
+    readOnly: true,
+    automaticLayout: true,
+    renderLineHighlight: "none",
+    contextmenu: false,
+  });
+  editor.value.setModel({
+    original: leftFileModel,
+    modified: rightFileModel,
+  });
+  editorElem.value.style.width = "600px";
+};
+
+// Destroy the editor.
+const destroy = (): void => {
+  if (editor.value)
+    editor.value.dispose();
+};
+
+// Destroy the editor when the component is unmounted.
+onUnmounted(() => destroy());
+
+watch(
+  () => props.selectedNode,
+  () => {
+    destroy();
+    initialize();
+  },
+);
+
+const selectedCurrentFile = () => {
+  const selectedCluster = props.selectedCluster!;
+  const selectedNodeId = props.selectedNode?.id;
+  const list = Array.from(selectedCluster);
+  list.sort((a, b) => b.similarity - a.similarity);
+
+  for (const cluster of list) {
+    if (cluster.rightFile.id === selectedNodeId) {
+      return cluster;
+    }
+  }
+  const another = list[0];
+  // reverse
+  return {
+    leftFile: another.rightFile,
+    rightFile: another.leftFile,
+  };
+};
 </script>
 
 <style lang="scss" scoped>
@@ -178,5 +264,21 @@ const selectedClusterPair = computed(() => {
       justify-content: center;
     }
   }
+}
+.popup {
+  position: absolute;
+  z-index: 1000;
+  width: 630px;
+  border: 1px solid #4e4e4e;
+  right: -700px;
+  height: 330px;
+}
+.popup .editor-element {
+  height: 300px;
+}
+.diff-file {
+  display: inline-block;
+  width: 300px;
+  text-overflow: ellipsis;
 }
 </style>
